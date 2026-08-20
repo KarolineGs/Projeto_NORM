@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+import pandas as pd
 
 from src.pre_processamento import (
     processador_sigep,
@@ -25,12 +26,14 @@ from src.modelling import (
 
 from src.graficos import (
     grafico_bsw_plataforma,
+    grafico_quimica_superficie_3d,
     grafico_scatter_matrix,
     grafico_quimica_3d,
     grafico_boxplots_quimicos,
     grafico_regioes_similaridade,
     grafico_matrizes_confusao,
     grafico_resultado_regressao,
+    grafico_superficie_probabilidade_2d,
     grafico_heatmap_metricas,
 )
 
@@ -186,7 +189,14 @@ def main() -> None:
         resultado_modelos, predicoes_modelos = comparar_modelos(
             dados_modelo=dados_modelo,
             n_splits=6,
-            limite=0.45,
+        )
+
+        # O gráfico 7 apresenta o modelo com maior AUC global na comparação.
+        nome_melhor_modelo = resultado_modelos.iloc[0]["MODELO"]
+        resultado_melhor_modelo = predicoes_modelos[nome_melhor_modelo]
+        logger.info(
+            "Melhor modelo para o gráfico 7 | %s",
+            nome_melhor_modelo,
         )
 
 
@@ -202,6 +212,15 @@ def main() -> None:
         resultado_modelo_final = predicoes_modelos[
             NOME_MODELO_FINAL
         ]
+
+        probabilidades_por_plataforma = pd.Series(
+            resultado_modelo_final["probabilidades"],
+            index=dados_modelo["LOCAL DA GERAÇÃO"],
+        )
+        df_analise["PROB_NORM"] = (
+            df_analise["LOCAL DA GERAÇÃO"]
+            .map(probabilidades_por_plataforma)
+        )
 
 
         logger.info(
@@ -228,6 +247,26 @@ def main() -> None:
         print(
             resultado_modelos.round(3)
         )
+
+        colunas_incerteza = [
+            "MODELO",
+            "AUC_MEDIA_DP",
+            "ACURACIA_MEDIA_DP",
+            "PRECISAO_MEDIA_DP",
+            "SENSIBILIDADE_MEDIA_DP",
+            "ESPECIFICIDADE_MEDIA_DP",
+            "F1_SCORE_MEDIA_DP",
+        ]
+        print("\nMétricas médias ± desvio-padrão entre folds:\n")
+        print(
+            resultado_modelos[colunas_incerteza]
+            .to_string(index=False)
+        )
+
+        print("\nMétricas por fold:\n")
+        for nome_modelo, resultado in predicoes_modelos.items():
+            print(f"\n{nome_modelo}\n")
+            print(resultado["metricas_folds"].round(3).to_string(index=False))
 
         print(
             "\nCoeficientes do modelo final:\n"
@@ -278,6 +317,16 @@ def main() -> None:
         )
 
 
+        grafico_quimica_superficie_3d(
+            df_analise=df_analise,
+            salvar_em=(
+                PASTA_GRAFICOS
+                / "03_quimica_superficie_3d.html"
+            ),
+            exibir=False,
+        )
+
+
         grafico_boxplots_quimicos(
             df_analise=df_analise,
             salvar_em=(
@@ -320,10 +369,21 @@ def main() -> None:
 
         grafico_resultado_regressao(
             dados_modelo=dados_modelo,
-            resultado_modelo=resultado_modelo_final,
+            resultado_modelo=resultado_melhor_modelo,
             salvar_em=(
                 PASTA_GRAFICOS
                 / "07_resultado_regressao.png"
+            ),
+            exibir=False,
+        )
+
+        grafico_superficie_probabilidade_2d(
+            dados_modelo=dados_modelo,
+            modelo=modelo_final,
+            resultado_modelo=resultado_modelo_final,
+            salvar_em=(
+                PASTA_GRAFICOS
+                / "09_superficie_probabilidade_sal_ba_sr.png"
             ),
             exibir=False,
         )

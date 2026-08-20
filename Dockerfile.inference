@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements-inference.txt .
+
+RUN pip install --no-cache-dir -r requirements-inference.txt
+
+COPY predict_batch.py .
+
+COPY outputs/models/modelo_norm.joblib ./outputs/models/modelo_norm.joblib
+
+RUN mkdir -p ./data/batch/input
+RUN mkdir -p ./data/batch/output
+
+ENV MODO_GCP=true
+ENV BUCKET_NAME=projeto-norm-ml-batch
+
+ENTRYPOINT ["python", "predict_batch.py"]

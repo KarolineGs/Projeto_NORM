@@ -44,8 +44,23 @@ logs/
 # Dados locais
 # ==============================
 
-data/raw/
-data/processed/
+# Nenhuma base de dados deve ser versionada, independentemente da etapa.
+data/
+dados/
+datasets/
+
+# Protecao adicional caso um arquivo de dados seja criado fora dessas pastas.
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.sqlite
+*.sqlite3
+*.db
 
 
 # ==============================
@@ -54,6 +69,7 @@ data/processed/
 
 outputs/figures/
 outputs/models/
+*.gif
 
 
 # ==============================
@@ -62,7 +78,6 @@ outputs/models/
 
 .DS_Store
 Thumbs.db
-
 
 # ==============================
 # Variáveis de ambiente / segredos

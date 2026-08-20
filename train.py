@@ -28,10 +28,10 @@ PASTA_MODELOS = BASE_DIR / "outputs" / "models"
 PASTA_LOGS = BASE_DIR / "logs"
 
 NOME_MODELO_FINAL = (
-    "Salinidade + Bário + Estrôncio"
+    "Salinidade + Relação Ba/Sr"
 )
 
-MODO_ANALISE = "janela"
+MODO_ANALISE = "data"
 
 
 # ==========================================================

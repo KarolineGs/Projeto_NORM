@@ -62,6 +62,7 @@ def validar_entradas(
 
 BASE_DIR = Path(__file__).resolve().parent # Diretório base do script
 
+
 CAMINHO_MODELO = (
     BASE_DIR
     / "outputs"
@@ -115,14 +116,14 @@ def main() -> None:
     {
         "SALINIDADE": [args.salinidade],
         "BARIO": [args.bario],
-        "ESTRONCIO": [args.estroncio],
-    }
+        "ESTRONCIO": [args.estroncio] }      
+
     )   
 
     features = [
         "SALINIDADE",
         "BARIO",
-        "ESTRONCIO",
+        "ESTRONCIO"
     ]
 
     X = novo_dado[

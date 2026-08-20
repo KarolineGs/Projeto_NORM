@@ -1,0 +1,34 @@
+.venv/
+.venv_test/
+__pycache__/
+*.pyc
+
+.git/
+.gitignore
+
+# Dados locais nunca devem entrar no contexto da imagem.
+data/
+dados/
+datasets/
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.sqlite
+*.sqlite3
+*.db
+
+# Variaveis de ambiente e segredos.
+.env
+.env.*
+
+outputs/figures/
+
+logs/
+
+.vscode/
+.idea/

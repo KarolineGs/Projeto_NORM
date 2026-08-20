@@ -1,25 +1,29 @@
-import os
-import sys
 import re
 import pandas as pd
-import numpy as np
 import logging
+import numpy as np
 from pathlib import Path
 from unidecode import unidecode
+
 
 
 # Configura logging
 logger = logging.getLogger(__name__)
 
+BASE_DIR = Path(__file__).resolve().parent.parent   # Diretório base do projeto
+
+PASTA_RAW = BASE_DIR / "data" / "raw"
+PASTA_PROCESSED = BASE_DIR / "data" / "processed"
+
 
 ###TRATAMENTO COMUNS AOS BANCOS DE DADOS###########
 def carregar_dados(
     nome_arquivo: str,
-    pasta: str = "data/raw"
+    pasta: Path = PASTA_RAW
 ) -> pd.DataFrame:
 
-    raiz = Path(__file__).resolve().parents[1]
-    caminho = raiz / pasta / nome_arquivo
+    
+    caminho = pasta / nome_arquivo
 
     logger.info("Carregando dados de %s", caminho)
 
@@ -72,15 +76,14 @@ def carregar_dados(
 def salvar_csv(
     df: pd.DataFrame,
     nome_arquivo: str,
-    pasta: str = "data/processed"
+    pasta: Path = PASTA_PROCESSED
 ) -> pd.DataFrame:
     """
     Salva um DataFrame como CSV na pasta especificada.
     Cria automaticamente a pasta se ela não existir.
     """
 
-    raiz = Path(__file__).resolve().parents[1]
-    caminho_pasta = raiz / pasta
+    caminho_pasta = pasta
 
     caminho_pasta.mkdir(
         parents=True,
@@ -293,7 +296,7 @@ def produção_mensal_sigep(df):
 
 def processador_sigep() -> pd.DataFrame:
     logger.info('Iniciando pre_processamento do SIGEP')
-    df = carregar_dados('2003_2024_SIGEP.csv', pasta='data/raw')
+    df = carregar_dados('2003_2024_SIGEP.csv')
     df = remover_colunas_nulas(df)
     df = tratar_valores_nulos(df, subset=['Instalação Destino'])
     df = tratar_dados_duplicados(df,subset=['Óleo (bbl/dia)'] )
@@ -364,7 +367,7 @@ def renomear_plataformas_sigre(df: pd.DataFrame)-> pd.DataFrame:
 def processador_sigre()-> pd.DataFrame:
 
     logger.info('Iniciando pre processamento do SIGRE')
-    df = carregar_dados('levantamento_borras+norm_sigre_2025_11_11.xlsx', pasta='data/raw')
+    df = carregar_dados('levantamento_borras+norm_sigre_2025_11_11.xlsx')
     df=remover_colunas_nulas(df)
     df = renomear_colunas(df, columns={'Dt. Geração': 'Período',
                                         'Resíduo': 'TIPO DE RESÍDUO',
@@ -416,17 +419,13 @@ COLUNAS_FIXAS = {
 COLUNAS_QUIMICAS = [
     "BÁRIO",
     "ESTRÔNCIO",
-    "MAGNÉSIO",
-    "SALINIDADE",
-    "SULFATO"
+    "SALINIDADE"
 ]
 # Nomes sem acento usados a partir da agregação mensal em diante
 NOME_ASCII_QUIMICAS = {
     'BÁRIO':      'BARIO',
     'ESTRÔNCIO':  'ESTRONCIO',
-    'MAGNÉSIO':   'MAGNESIO',
-    'SALINIDADE': 'SALINIDADE',
-    'SULFATO': 'SULFATO'
+    'SALINIDADE': 'SALINIDADE'
 }
 
 
@@ -440,14 +439,13 @@ colunas_numericas = [
 ] + COLUNAS_QUIMICAS
 
 
-
 def extrair_parametro_fenix(col: str) -> str:
     match = re.search(r'\[([^\]]+)\]', str(col))
     bruto = match.group(1).strip() if match else str(col).strip()
     return ALIAS_QUIMICAS.get(bruto, bruto)
 
 def carregar_dados_fenix(
-    pasta: str = "data/raw"
+    pasta: Path = PASTA_RAW
 ) -> pd.DataFrame:
 
     logger.info(
@@ -455,8 +453,8 @@ def carregar_dados_fenix(
         len(ARQUIVOS_AGUA)
     )
 
-    raiz = Path(__file__).resolve().parents[1]
-    pasta_dados = raiz / pasta
+    
+    pasta_dados = pasta
 
     dfs = []
 
@@ -589,28 +587,86 @@ def agregar_mensal_fenix(
 
     df = df.copy()
 
-    quimica_agg = {
-        NOME_ASCII_QUIMICAS[col]: (col, "mean")
-        for col in COLUNAS_QUIMICAS
-        if col in df.columns
+    agregacoes_poco = {
+        "CAMPO": ("CAMPO", "first"),
+        "QW_M3D": ("QW_M3D", "median"),
+        "QO_M3D": ("QO_M3D", "median"),
+        "BSW": ("BSW", "median"),
     }
 
-    colunas_quimicas_ascii = list(
-        quimica_agg.keys()
+    for coluna in COLUNAS_QUIMICAS:
+        if coluna in df.columns:
+            agregacoes_poco[coluna] = (coluna, "median")
+
+    # Quimica e vazao aparecem em linhas distintas no FENIX.
+    # Consolida primeiro cada poco no mes para parear os dados.
+    mensal_poco = (
+        df
+        .groupby(
+            ["SIGLA", "Mes", "POCO"],
+            as_index=False,
+        )
+        .agg(**agregacoes_poco)
     )
 
-    agg = (
-        df.groupby(["SIGLA", "Mes"])
-        .agg(
-            CAMPO=("CAMPO", "first"),
-            QW_M3D=("QW_M3D", "sum"),
-            QO_M3D=("QO_M3D", "sum"),
-            BSW=("BSW", "median"),
-            **quimica_agg,
-            N_POCOS=("POCO", "nunique"),
+    def media_ponderada(grupo, coluna):
+        dados = (
+            grupo[[coluna, "QW_M3D"]]
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
         )
-        .reset_index()
-    )
+
+        dados = dados[
+            (dados[coluna] > 0)
+            & (dados["QW_M3D"] > 0)
+        ]
+
+        if dados.empty:
+            return np.nan
+
+        return np.average(
+            dados[coluna],
+            weights=dados["QW_M3D"],
+        )
+
+    registros = []
+
+    for (sigla, mes), grupo in mensal_poco.groupby(
+        ["SIGLA", "Mes"]
+    ):
+
+        registro = {
+            "SIGLA": sigla,
+            "Mes": mes,
+            "CAMPO": grupo["CAMPO"].dropna().iloc[0]
+            if grupo["CAMPO"].notna().any()
+            else np.nan,
+            "QW_M3D": grupo["QW_M3D"].sum(min_count=1),
+            "QO_M3D": grupo["QO_M3D"].sum(min_count=1),
+            "BSW": grupo["BSW"].median(),
+            "N_POCOS": grupo["POCO"].nunique(),
+        }
+
+        for col in COLUNAS_QUIMICAS:
+
+            if col in grupo.columns:
+
+                nome_saida = NOME_ASCII_QUIMICAS[col]
+
+                registro[nome_saida] = media_ponderada(
+                    grupo,
+                    col
+                )
+
+        registros.append(registro)
+
+    agg = pd.DataFrame(registros)
+
+    colunas_quimicas_ascii = [
+        NOME_ASCII_QUIMICAS[col]
+        for col in COLUNAS_QUIMICAS
+        if NOME_ASCII_QUIMICAS[col] in agg.columns
+    ]
 
     agg["dias_mes"] = (
         agg["Mes"]

@@ -11,10 +11,10 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     roc_auc_score,
+    roc_curve,
 )
 from sklearn.model_selection import (
     StratifiedKFold,
-    cross_val_predict,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
@@ -33,6 +33,7 @@ VARIAVEIS_MODELO = [
     "MEDIANA_SALINIDADE_PLAT",
     "MEDIANA_BARIO_PLAT",
     "MEDIANA_ESTRONCIO_PLAT",
+    "RELACAO_BARIO_ESTRONCIO",
 ]
 
 def preparar_dados_modelo(
@@ -76,6 +77,7 @@ def preparar_dados_modelo(
             "MEDIANA_SALINIDADE_PLAT": "SALINIDADE",
             "MEDIANA_BARIO_PLAT": "BARIO",
             "MEDIANA_ESTRONCIO_PLAT": "ESTRONCIO",
+            "RELACAO_BARIO_ESTRONCIO": "RELACAO_BA_SR",
         }
     )
 
@@ -83,6 +85,7 @@ def preparar_dados_modelo(
         "SALINIDADE",
         "BARIO",
         "ESTRONCIO",
+        "RELACAO_BA_SR",
     ]
 
     # Conversão numérica
@@ -114,6 +117,7 @@ def preparar_dados_modelo(
         (dados["SALINIDADE"] > 0)
         & (dados["BARIO"] > 0)
         & (dados["ESTRONCIO"] > 0)
+        & (dados["RELACAO_BA_SR"] > 0)
     ].copy()
 
     dados[COLUNA_ALVO] = (
@@ -190,11 +194,24 @@ def calcular_especificidade(
 
     return tn / (tn + fp)
 
+def calcular_limiar_youden(
+    y_real,
+    probabilidades,
+) -> float:
+    """Seleciona o limiar que maximiza sensibilidade + especificidade - 1."""
+
+    fpr, tpr, limiares = roc_curve(y_real, probabilidades)
+    validos = np.isfinite(limiares)
+    if not validos.any():
+        raise ValueError("Nao foi possivel calcular um limiar de Youden valido.")
+
+    indice = np.argmax((tpr - fpr)[validos])
+    return float(limiares[validos][indice])
+
 def avaliar_modelo(
     dados_modelo: pd.DataFrame,
     features: list[str],
     n_splits: int = 4,
-    limite: float = 0.45,
 ) -> dict:
     """
     Avalia uma regressão logística utilizando
@@ -211,9 +228,6 @@ def avaliar_modelo(
     n_splits : int, padrão=5
         Número máximo de folds.
 
-    limite : float, padrão=0.5
-        Limite para classificação.
-
     Returns
     -------
     dict
@@ -226,10 +240,25 @@ def avaliar_modelo(
         COLUNA_ALVO
     ]
 
+    if dados_modelo.empty:
+        raise ValueError(
+            "Nenhuma observacao valida para modelagem. "
+            "Verifique se as variaveis quimicas possuem "
+            "valores numericos positivos."
+        )
+
+    contagem_classes = y.value_counts()
+
+    if len(contagem_classes) < 2:
+        raise ValueError(
+            "A variavel alvo precisa conter as duas classes "
+            "(0 e 1) para avaliar o modelo."
+        )
+
     # Garante que não haja mais folds
     # que observações na menor classe
     menor_classe = int(
-        y.value_counts().min()
+        contagem_classes.min()
     )
 
     folds = min(
@@ -249,15 +278,69 @@ def avaliar_modelo(
         random_state=42,
     )
 
-    modelo = criar_modelo_logistico()
+    probabilidades = np.full(len(y), np.nan, dtype=float)
+    particoes_folds = []
 
-    probabilidades = cross_val_predict(
-        modelo,
-        X,
-        y,
-        cv=cv,
-        method="predict_proba",
-    )[:, 1]
+    for numero_fold, (indices_treino, indices_teste) in enumerate(
+        cv.split(X, y),
+        start=1,
+    ):
+        modelo_fold = criar_modelo_logistico()
+        X_treino = X.iloc[indices_treino]
+        X_teste = X.iloc[indices_teste]
+        y_treino = y.iloc[indices_treino]
+        y_teste = y.iloc[indices_teste]
+
+        modelo_fold.fit(X_treino, y_treino)
+        prob_fold = modelo_fold.predict_proba(X_teste)[:, 1]
+        probabilidades[indices_teste] = prob_fold
+
+        particoes_folds.append({
+            "FOLD": numero_fold,
+            "indices_treino": indices_treino,
+            "indices_teste": indices_teste,
+            "probabilidades": prob_fold,
+        })
+
+    limite = calcular_limiar_youden(y, probabilidades)
+    metricas_folds = []
+
+    for particao in particoes_folds:
+        indices_treino = particao["indices_treino"]
+        indices_teste = particao["indices_teste"]
+        prob_fold = particao["probabilidades"]
+        y_teste = y.iloc[indices_teste]
+        prev_fold = (prob_fold >= limite).astype(int)
+
+        tn_fold, fp_fold, fn_fold, tp_fold = confusion_matrix(
+            y_teste,
+            prev_fold,
+            labels=[0, 1],
+        ).ravel()
+
+        metricas_folds.append({
+            "FOLD": particao["FOLD"],
+            "N_TREINO": len(indices_treino),
+            "N_TESTE": len(indices_teste),
+            "AUC": roc_auc_score(y_teste, prob_fold),
+            "ACURACIA": accuracy_score(y_teste, prev_fold),
+            "PRECISAO": precision_score(
+                y_teste, prev_fold, zero_division=0
+            ),
+            "SENSIBILIDADE": recall_score(
+                y_teste, prev_fold, zero_division=0
+            ),
+            "ESPECIFICIDADE": calcular_especificidade(
+                y_teste, prev_fold
+            ),
+            "F1_SCORE": f1_score(
+                y_teste, prev_fold, zero_division=0
+            ),
+            "VP": tp_fold,
+            "FP": fp_fold,
+            "VN": tn_fold,
+            "FN": fn_fold,
+        })
 
     previsoes = (
         probabilidades >= limite
@@ -268,6 +351,23 @@ def avaliar_modelo(
         previsoes,
         labels=[0, 1],
     ).ravel()
+
+    tabela_folds = pd.DataFrame(metricas_folds)
+    metricas_resumo = [
+        "AUC",
+        "ACURACIA",
+        "PRECISAO",
+        "SENSIBILIDADE",
+        "ESPECIFICIDADE",
+        "F1_SCORE",
+    ]
+    resumo_folds = {
+        metrica: {
+            "media": tabela_folds[metrica].mean(),
+            "desvio_padrao": tabela_folds[metrica].std(ddof=1),
+        }
+        for metrica in metricas_resumo
+    }
 
     resultado = {
         "AUC": roc_auc_score(
@@ -312,6 +412,9 @@ def avaliar_modelo(
         "previsoes": previsoes,
         "features": features,
         "folds": folds,
+        "limite_youden": limite,
+        "metricas_folds": tabela_folds,
+        "resumo_folds": resumo_folds,
     }
 
     return resultado
@@ -319,7 +422,6 @@ def avaliar_modelo(
 def comparar_modelos(
     dados_modelo: pd.DataFrame,
     n_splits: int = 4,
-    limite: float = 0.45,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Compara diferentes combinações de variáveis
@@ -339,32 +441,14 @@ def comparar_modelos(
     )
 
     modelos = {
-        "Salinidade": [
-            "LOG_SALINIDADE",
-        ],
-
-        "Bário": [
-            "LOG_BARIO",
-        ],
-
-        "Estrôncio": [
-            "LOG_ESTRONCIO",
-        ],
-
-        "Salinidade + Bário": [
-            "LOG_SALINIDADE",
-            "LOG_BARIO",
-        ],
-
-        "Salinidade + Estrôncio": [
-            "LOG_SALINIDADE",
-            "LOG_ESTRONCIO",
-        ],
-
         "Salinidade + Bário + Estrôncio": [
-            "LOG_SALINIDADE",
-            "LOG_BARIO",
-            "LOG_ESTRONCIO",
+            "SALINIDADE",
+            "BARIO",
+            "ESTRONCIO",
+        ],
+        "Salinidade + Relação Ba/Sr": [
+            "SALINIDADE",
+            "RELACAO_BA_SR",
         ],
     }
 
@@ -383,7 +467,6 @@ def comparar_modelos(
             dados_modelo=dados_modelo,
             features=features,
             n_splits=n_splits,
-            limite=limite,
         )
 
         resultados.append({
@@ -399,6 +482,22 @@ def comparar_modelos(
             "FP": resultado["FP"],
             "VN": resultado["VN"],
             "FN": resultado["FN"],
+            "LIMIAR_YOUDEN": resultado["limite_youden"],
+            **{
+                f"{metrica}_MEDIA_FOLDS": resumo["media"]
+                for metrica, resumo in resultado["resumo_folds"].items()
+            },
+            **{
+                f"{metrica}_DP_FOLDS": resumo["desvio_padrao"]
+                for metrica, resumo in resultado["resumo_folds"].items()
+            },
+            **{
+                f"{metrica}_MEDIA_DP": (
+                    f"{resumo['media']:.3f} ± "
+                    f"{resumo['desvio_padrao']:.3f}"
+                )
+                for metrica, resumo in resultado["resumo_folds"].items()
+            },
         })
 
         predicoes_modelos[
@@ -435,6 +534,7 @@ def treinar_modelo_final(
         "SALINIDADE",
         "BARIO",
         "ESTRONCIO",
+        
     ]
 
     X = dados_modelo[
@@ -475,7 +575,7 @@ def obter_coeficientes(
     variaveis = [
         "SALINIDADE",
         "BARIO",
-        "ESTRONCIO",
+        "ESTRONCIO"
     ]
 
     coeficientes = pd.DataFrame({

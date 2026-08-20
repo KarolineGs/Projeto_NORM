@@ -1,5 +1,9 @@
 import numpy as np
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
@@ -21,6 +25,7 @@ from sklearn.metrics import (
 )
 
 from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 
 # src/visualization/graficos.py
 
@@ -51,9 +56,10 @@ def grafico_scatter_matrix(
     """
 
     variaveis = {
-        "Bário (mg/L)": "MEDIANA_BARIO_PLAT",
-        "Estrôncio (mg/L)": "MEDIANA_ESTRONCIO_PLAT",
-        "Salinidade (mg/L)": "MEDIANA_SALINIDADE_PLAT",
+        "Bário mediano (mg/L)": "MEDIANA_BARIO_PLAT",
+        "Estrôncio mediano (mg/L)": "MEDIANA_ESTRONCIO_PLAT",
+        "Salinidade mediana (mg/L)": "MEDIANA_SALINIDADE_PLAT",
+        "Relação Bário/Estrôncio (Ba/Sr)": "RELACAO_BARIO_ESTRONCIO",
     }
 
     # Mantém somente as variáveis que existem no dataframe
@@ -140,7 +146,7 @@ def grafico_scatter_matrix(
 
         title=(
             "Matriz de dispersão — "
-            "Bário, Estrôncio e Salinidade"
+            "Bário, Estrôncio, Salinidade e relação Ba/Sr"
         ),
 
         height=900,
@@ -205,10 +211,10 @@ def calcular_correlacao_quimica(
 ) -> pd.DataFrame:
 
     variaveis = {
-        "Estrôncio": "MEDIA_ESTRONCIO_PLAT",
-        "Salinidade": "MEDIA_SALINIDADE_PLAT",
-        "Bário": "MEDIA_BARIO_PLAT",
-        "Sulfato": "MEDIA_SULFATO_PLAT",
+        "Estrôncio": "MEDIANA_ESTRONCIO_PLAT",
+        "Salinidade": "MEDIANA_SALINIDADE_PLAT",
+        "Bário": "MEDIANA_BARIO_PLAT",
+
     }
 
     colunas = [
@@ -259,8 +265,8 @@ def grafico_quimica_3d(
 
     variaveis = [
         "MEDIANA_SALINIDADE_PLAT",
-        "MEDIANA_ESTRONCIO_PLAT",
-        "MEDIANA_BARIO_PLAT",
+        "RELACAO_BARIO_ESTRONCIO",
+        "MEDIA_BSW_PLAT",
     ]
 
     dados = (
@@ -268,6 +274,9 @@ def grafico_quimica_3d(
             [
                 "LOCAL DA GERAÇÃO",
                 "TEM_NORM",
+                "PROB_NORM",
+                "MASSA_CLASSIFICADA_KG",
+                "TIPO_MASSA",
                 *variaveis,
             ]
         ]
@@ -287,6 +296,12 @@ def grafico_quimica_3d(
             0: "Sem NORM",
         })
     )
+    dados["MASSA_CLASSIFICADA_KG"] = dados["MASSA_CLASSIFICADA_KG"].clip(lower=0)
+    dados["MASSA_CLASSIFICADA_T"] = dados["MASSA_CLASSIFICADA_KG"] / 1000
+    log_massa = np.log1p(dados["MASSA_CLASSIFICADA_KG"])
+    dados["TAMANHO_MARCADOR"] = (
+        6 + 22 * log_massa / max(log_massa.max(), 1)
+    )
 
     # ======================================================
     # PADRONIZAÇÃO
@@ -296,8 +311,8 @@ def grafico_quimica_3d(
 
     colunas_z = [
         "SALINIDADE_Z",
-        "ESTRONCIO_Z",
-        "BARIO_Z",
+        "RELACAO_BA_SR_Z",
+        "BSW_Z",
     ]
 
     dados[colunas_z] = scaler.fit_transform(
@@ -311,38 +326,36 @@ def grafico_quimica_3d(
     fig = px.scatter_3d(
         dados,
         x="SALINIDADE_Z",
-        y="ESTRONCIO_Z",
-        z="BARIO_Z",
-        color="NORM",
+        y="RELACAO_BA_SR_Z",
+        z="BSW_Z",
+        color="PROB_NORM",
         symbol="NORM",
+        size="TAMANHO_MARCADOR",
+        size_max=28,
         hover_name="LOCAL DA GERAÇÃO",
 
         hover_data={
             "MEDIANA_SALINIDADE_PLAT": ":.2f",
-            "MEDIANA_ESTRONCIO_PLAT": ":.2f",
-            "MEDIANA_BARIO_PLAT": ":.2f",
+            "RELACAO_BARIO_ESTRONCIO": ":.4f",
+            "MEDIA_BSW_PLAT": ":.2f",
+            "TIPO_MASSA": True,
+            "MASSA_CLASSIFICADA_T": ":,.2f",
+            "PROB_NORM": ":.1%",
+            "TAMANHO_MARCADOR": False,
             "SALINIDADE_Z": False,
-            "ESTRONCIO_Z": False,
-            "BARIO_Z": False,
+            "RELACAO_BA_SR_Z": False,
+            "BSW_Z": False,
         },
 
-        color_discrete_map={
-            "Com NORM": "#e74c3c",
-            "Sem NORM": "#3498db",
-        },
+        color_continuous_scale="RdYlBu_r",
+        range_color=[0, 1],
 
         title=(
-            "Salinidade × Estrôncio × Bário — "
+            "Salinidade × Relação Ba/Sr × BSW — "
             "variáveis padronizadas"
         ),
 
         opacity=0.85,
-    )
-
-    fig.update_traces(
-        marker=dict(
-            size=7
-        )
     )
 
     fig.update_layout(
@@ -354,15 +367,30 @@ def grafico_quimica_3d(
                 "Salinidade padronizada (z-score)"
             ),
             yaxis_title=(
-                "Estrôncio padronizado (z-score)"
+                "Relação Ba/Sr padronizada (z-score)"
             ),
             zaxis_title=(
-                "Bário padronizado (z-score)"
+                "BSW padronizado (z-score)"
             ),
             aspectmode="cube",
         ),
 
-        legend_title="Classificação",
+        legend={
+            "title": {"text": "Classificação"},
+            "x": 0.02,
+            "y": 0.98,
+            "xanchor": "left",
+            "yanchor": "top",
+            "bgcolor": "rgba(255,255,255,0.8)",
+        },
+        coloraxis_colorbar={
+            "title": "Probabilidade de NORM",
+            "tickformat": ".0%",
+            "x": 1.05,
+            "y": 0.45,
+            "len": 0.65,
+        },
+        margin={"l": 20, "r": 190, "b": 20, "t": 70},
     )
 
     # ======================================================
@@ -399,8 +427,19 @@ def grafico_boxplots_quimicos(
         "MEDIANA_SALINIDADE_PLAT": "SALINIDADE",
         "MEDIANA_BARIO_PLAT": "BARIO",
         "MEDIANA_ESTRONCIO_PLAT": "ESTRONCIO",
-        "MEDIANA_SULFATO_PLAT": "SULFATO",
+        "RELACAO_BARIO_ESTRONCIO": "RELACAO_BA_SR",
     }
+
+    mapa = {
+        coluna: nome
+        for coluna, nome in mapa.items()
+        if coluna in df_analise.columns
+    }
+
+    if not mapa:
+        raise ValueError(
+            "Nenhuma variavel quimica disponivel para gerar os boxplots."
+        )
 
     dados = (
         df_analise[
@@ -413,13 +452,7 @@ def grafico_boxplots_quimicos(
         .copy()
     )
 
-    numericas = [
-        "TEM_NORM",
-        "SALINIDADE",
-        "BARIO",
-        "ESTRONCIO",
-        "SULFATO",
-    ]
+    numericas = ["TEM_NORM", *mapa.values()]
 
     for coluna in numericas:
 
@@ -437,11 +470,9 @@ def grafico_boxplots_quimicos(
         .dropna(subset=numericas)
     )
 
+    colunas_quimicas = list(mapa.values())
     dados = dados[
-        (dados["SALINIDADE"] > 0)
-        & (dados["BARIO"] > 0)
-        & (dados["ESTRONCIO"] > 0)
-        & (dados["SULFATO"] > 0)
+        dados[colunas_quimicas].gt(0).all(axis=1)
     ].copy()
 
     dados["GRUPO"] = (
@@ -477,16 +508,28 @@ def grafico_boxplots_quimicos(
             "Estrôncio (mg/L)",
         ),
         (
-            "SULFATO",
-            "Sulfato (mg/L)",
+            "RELACAO_BA_SR",
+            "Relação Bário/Estrôncio (Ba/Sr)",
         ),
     ]
 
+    variaveis = [
+        (coluna, titulo)
+        for coluna, titulo in variaveis
+        if coluna in colunas_quimicas
+    ]
+
     fig, axes = plt.subplots(
-        1,
-        4,
-        figsize=(14, 5.2),
+        int(np.ceil(len(variaveis) / 4)),
+        min(4, len(variaveis)),
+        figsize=(
+            3.5 * min(4, len(variaveis)),
+            5.2 * int(np.ceil(len(variaveis) / 4)),
+        ),
+        squeeze=False,
     )
+
+    axes = axes.ravel()
 
     for ax, (coluna, titulo) in zip(
         axes,
@@ -576,6 +619,9 @@ def grafico_boxplots_quimicos(
 
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
+
+    for ax in axes[len(variaveis):]:
+        ax.set_visible(False)
 
     legenda = [
         Line2D(
@@ -947,10 +993,12 @@ def grafico_regioes_similaridade(
 ):
 
     fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(22, 6.8),
+        2,
+        2,
+        figsize=(15, 13),
     )
+
+    axes = axes.ravel()
 
     fig.patch.set_facecolor(
         WHITE
@@ -997,6 +1045,22 @@ def grafico_regioes_similaridade(
         xlabel="Salinidade (mg/L)",
         ylabel="Estrôncio (mg/L)",
     )
+
+    # ==============================================
+    # SALINIDADE × RELAÇÃO ESTRÔNCIO/BÁRIO
+    # ==============================================
+
+    semelhantes_sal_relacao = desenhar_similaridade(
+        ax=axes[3],
+        df_analise=df_analise,
+        coluna_x="MEDIANA_SALINIDADE_PLAT",
+        coluna_y="RELACAO_BARIO_ESTRONCIO",
+        titulo="Salinidade × Relação Ba/Sr",
+        xlabel="Salinidade (mg/L)",
+        ylabel="Relação Bário/Estrôncio (Ba/Sr)",
+    )
+
+
 
     legenda = [
         Line2D(
@@ -1091,12 +1155,15 @@ def grafico_regioes_similaridade(
         "BARIO_ESTRONCIO": semelhantes_ba_sr,
         "SALINIDADE_BARIO": semelhantes_sal_ba,
         "SALINIDADE_ESTRONCIO": semelhantes_sal_sr,
+        "SALINIDADE_RELACAO_BA_SR": semelhantes_sal_relacao,
     }
 def desenhar_matriz_cartoes(
     ax,
     y_real,
     y_previsto,
     probabilidades,
+    resumo_folds: dict,
+    limite_youden: float,
     titulo: str,
     letra: str,
 ):
@@ -1141,22 +1208,22 @@ def desenhar_matriz_cartoes(
     cartoes = [
         (
             0, 1, tn,
-            "Verdadeiro negativo",
+            "Verdadeiro\nnegativo",
             "#B9BEC7",
         ),
         (
             1, 1, fp,
-            "Falso positivo",
+            "Falso\npositivo",
             "#F4D6D4",
         ),
         (
             0, 0, fn,
-            "Falso negativo",
+            "Falso\nnegativo",
             "#F4D6D4",
         ),
         (
             1, 0, tp,
-            "Verdadeiro positivo",
+            "Verdadeiro\npositivo",
             "#9DCCAE",
         ),
     ]
@@ -1201,7 +1268,7 @@ def desenhar_matriz_cartoes(
             descricao,
             ha="center",
             va="center",
-            fontsize=7,
+            fontsize=6.5,
             color="#626A73",
         )
 
@@ -1253,24 +1320,39 @@ def desenhar_matriz_cartoes(
         pad=10,
     )
 
+    def media_dp(metrica: str, percentual: bool = True) -> str:
+        resumo = resumo_folds[metrica]
+        if percentual:
+            return (
+                f"{resumo['media']:.0%} ± "
+                f"{resumo['desvio_padrao']:.0%}"
+            )
+        return (
+            f"{resumo['media']:.2f} ± "
+            f"{resumo['desvio_padrao']:.2f}"
+        )
+
     ax.text(
         0.94,
-        -0.50,
+        -0.78,
         (
-            f"Sensibilidade: {sensibilidade:.0%}  •  "
-            f"Especificidade: {especificidade:.0%}\n"
-            f"Acurácia: {acuracia:.0%}  •  "
-            f"AUC: {auc:.2f}"
+            f"Limiar de Youden: {limite_youden:.3f}\n"
+            f"AUC: {media_dp('AUC', percentual=False)}  •  "
+            f"Acurácia: {media_dp('ACURACIA')}\n"
+            f"Precisão: {media_dp('PRECISAO')}  •  "
+            f"F1: {media_dp('F1_SCORE')}\n"
+            f"Sensibilidade: {media_dp('SENSIBILIDADE')}  •  "
+            f"Especificidade: {media_dp('ESPECIFICIDADE')}"
         ),
         ha="center",
         va="center",
-        fontsize=8,
+        fontsize=7.2,
         fontweight="bold",
     )
 
     ax.text(
         0.94,
-        -0.82,
+        -1.30,
         (
             f"{acertos} de {total} plataformas "
             "classificadas corretamente"
@@ -1287,7 +1369,7 @@ def desenhar_matriz_cartoes(
     )
 
     ax.set_ylim(
-        -0.98,
+        -1.48,
         1.98,
     )
 
@@ -1311,7 +1393,7 @@ def grafico_matrizes_confusao(
         "Estrôncio",
         "Salinidade + Bário",
         "Salinidade + Estrôncio",
-        "Salinidade + Bário + Estrôncio",
+        "Salinidade + Bário + Estrôncio"
     ]
 
     letras = [
@@ -1321,16 +1403,38 @@ def grafico_matrizes_confusao(
         "D",
         "E",
         "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K"
+    ]
+
+    if not predicoes_modelos:
+        raise ValueError(
+            "Nenhuma predicao de modelo disponivel para gerar as matrizes."
+        )
+
+    # Usa exatamente os modelos produzidos pela etapa de modelagem. Isso evita
+    # que nomes de variaveis opcionais fiquem dessincronizados entre modulos.
+    ordem_modelos = list(predicoes_modelos)
+    letras = [
+        chr(ord("A") + indice)
+        for indice in range(len(ordem_modelos))
     ]
 
     y = dados_modelo[
         "TEM_NORM"
     ].to_numpy()
 
+    numero_colunas = min(4, len(ordem_modelos))
+    numero_linhas = int(np.ceil(len(ordem_modelos) / numero_colunas))
+
     fig, axes = plt.subplots(
-        2,
-        3,
-        figsize=(16, 10),
+        numero_linhas,
+        numero_colunas,
+        figsize=(5.4 * numero_colunas, 5.0 * numero_linhas),
+        squeeze=False,
     )
 
     axes = axes.flatten()
@@ -1360,9 +1464,14 @@ def grafico_matrizes_confusao(
             probabilidades=resultado[
                 "probabilidades"
             ],
+            resumo_folds=resultado["resumo_folds"],
+            limite_youden=resultado["limite_youden"],
             titulo=nome_modelo,
             letra=letra,
         )
+
+    for ax in axes[len(ordem_modelos):]:
+        ax.set_visible(False)
 
     folds = predicoes_modelos[
         ordem_modelos[0]
@@ -1383,10 +1492,10 @@ def grafico_matrizes_confusao(
 
     fig.text(
         0.5,
-        0.025,
+        0.018,
         (
-            "Limite de classificação da "
-            "probabilidade de NORM = 0,50"
+            "Limiar de classificação determinado pelo índice de Youden, "
+            "maximizando conjuntamente sensibilidade e especificidade"
         ),
         ha="center",
         fontsize=9,
@@ -1394,7 +1503,7 @@ def grafico_matrizes_confusao(
     )
 
     plt.tight_layout(
-        rect=[0, 0.05, 1, 0.95],
+        rect=[0, 0.08, 1, 0.94],
         h_pad=2.5,
         w_pad=2,
     )
@@ -1435,6 +1544,8 @@ def grafico_resultado_regressao(
     previsoes = resultado_modelo[
         "previsoes"
     ]
+    limite_youden = resultado_modelo["limite_youden"]
+    nome_features = " + ".join(resultado_modelo["features"])
 
     dados["PROB_NORM"] = probabilidades
 
@@ -1543,7 +1654,7 @@ def grafico_resultado_regressao(
         tpr,
         linewidth=3,
         label=(
-            f"Modelo completo — "
+            f"{nome_features} — "
             f"AUC = {auc:.3f}"
         ),
     )
@@ -1589,6 +1700,7 @@ def grafico_resultado_regressao(
         0.05,
         (
             f"AUC = {auc:.3f}\n"
+            f"Limiar de Youden = {limite_youden:.3f}\n"
             f"Sensibilidade = {sensibilidade:.1%}\n"
             f"Especificidade = {especificidade:.1%}"
         ),
@@ -1612,12 +1724,12 @@ def grafico_resultado_regressao(
     # Probabilidade
     ax2.axhspan(
         0,
-        0.5,
+        limite_youden,
         alpha=0.05,
     )
 
     ax2.axhspan(
-        0.5,
+        limite_youden,
         1,
         alpha=0.05,
     )
@@ -1641,9 +1753,10 @@ def grafico_resultado_regressao(
     )
 
     ax2.axhline(
-        0.45,
+        limite_youden,
         linestyle="--",
         linewidth=1.7,
+        label=f"Limiar de Youden = {limite_youden:.3f}",
     )
 
     ax2.set_xticks(
@@ -1686,13 +1799,20 @@ def grafico_resultado_regressao(
     Patch(facecolor=GREEN, label="Verdadeiro negativo"),
     Patch(facecolor=ORANGE, label="Falso positivo"),
     Patch(facecolor=NAVY, label="Falso negativo"),
+    Line2D(
+        [0], [0],
+        linestyle="--",
+        linewidth=1.7,
+        color="#1f77b4",
+        label=f"Limiar de Youden = {limite_youden:.3f}",
+    ),
     ]
 
     ax2.legend(
         handles=legenda,
         loc="upper center",
         bbox_to_anchor=(0.5, -0.25),  # abaixo do gráfico
-        ncol=2,
+        ncol=3,
         frameon=False,
         fontsize=9,
     )
@@ -1718,6 +1838,188 @@ def grafico_resultado_regressao(
             facecolor=WHITE,
         )
 
+    if exibir:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return fig
+
+def grafico_superficie_probabilidade_2d(
+    dados_modelo: pd.DataFrame,
+    modelo: Pipeline,
+    resultado_modelo: dict,
+    salvar_em: str | None = None,
+    exibir: bool = True,
+):
+    """Plota uma projeção 2D da probabilidade do modelo selecionado."""
+
+    features = resultado_modelo["features"]
+    if features == ["SALINIDADE", "RELACAO_BA_SR"]:
+        coluna_x, coluna_y = "SALINIDADE", "RELACAO_BA_SR"
+        rotulo_y = "Relação Bário/Estrôncio (Ba/Sr)"
+        valores_fixos = {}
+        complemento_titulo = ""
+    elif features == ["SALINIDADE", "BARIO", "ESTRONCIO"]:
+        coluna_x, coluna_y = "SALINIDADE", "BARIO"
+        rotulo_y = "Bário (mg/L)"
+        estroncio_fixo = float(dados_modelo["ESTRONCIO"].median())
+        valores_fixos = {"ESTRONCIO": estroncio_fixo}
+        complemento_titulo = (
+            f" — Estrôncio fixado na mediana ({estroncio_fixo:.2f} mg/L)"
+        )
+    else:
+        raise ValueError(
+            f"Features não suportadas pela superfície 2D: {features}"
+        )
+
+    colunas = [
+        "LOCAL DA GERAÇÃO",
+        "TEM_NORM",
+        *features,
+    ]
+    dados = (
+        dados_modelo[colunas]
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .copy()
+    )
+    dados = dados[
+        dados[features].gt(0).all(axis=1)
+    ]
+
+    if dados.empty:
+        raise ValueError("Nenhum dado positivo disponivel para o grafico Ba/Sr.")
+
+    def limites_log(serie: pd.Series, margem: float = 0.12):
+        minimo = np.log10(serie.min())
+        maximo = np.log10(serie.max())
+        amplitude = max(maximo - minimo, 0.2)
+        return 10 ** (minimo - margem * amplitude), 10 ** (
+            maximo + margem * amplitude
+        )
+
+    x_min, x_max = limites_log(dados[coluna_x])
+    y_min, y_max = limites_log(dados[coluna_y])
+    eixo_x = np.geomspace(x_min, x_max, 240)
+    eixo_y = np.geomspace(y_min, y_max, 240)
+    grade_x, grade_y = np.meshgrid(eixo_x, eixo_y)
+
+    entrada_grade = pd.DataFrame({
+        coluna_x: grade_x.ravel(),
+        coluna_y: grade_y.ravel(),
+    })
+    for coluna, valor in valores_fixos.items():
+        entrada_grade[coluna] = valor
+    entrada_grade = entrada_grade[features]
+    probabilidade = modelo.predict_proba(entrada_grade)[:, 1].reshape(
+        grade_x.shape
+    )
+    limiar = float(resultado_modelo["limite_youden"])
+
+    fig, ax = plt.subplots(figsize=(11, 8))
+    niveis_preenchimento = np.linspace(0, 1, 11)
+    superficie = ax.contourf(
+        grade_x,
+        grade_y,
+        probabilidade,
+        levels=niveis_preenchimento,
+        cmap="Blues",
+        alpha=0.42,
+    )
+
+    niveis_referencia = sorted({0.2, 0.4, 0.5, 0.6, 0.8})
+    curvas = ax.contour(
+        grade_x,
+        grade_y,
+        probabilidade,
+        levels=niveis_referencia,
+        colors="#5F6368",
+        linestyles="--",
+        linewidths=1.0,
+    )
+    ax.clabel(curvas, fmt=lambda valor: f"{valor:.0%}", fontsize=8)
+
+    curva_youden = ax.contour(
+        grade_x,
+        grade_y,
+        probabilidade,
+        levels=[limiar],
+        colors="#3F3F3F",
+        linewidths=2.6,
+    )
+    rotulos_youden = ax.clabel(
+        curva_youden,
+        fmt={limiar: f"Corte ótimo: {limiar:.1%}"},
+        fontsize=10,
+    )
+    for rotulo in rotulos_youden:
+        rotulo.set_fontweight("bold")
+        rotulo.set_color("#202020")
+        rotulo.set_bbox({
+            "boxstyle": "round,pad=0.28",
+            "facecolor": WHITE,
+            "edgecolor": "#3F3F3F",
+            "linewidth": 0.8,
+            "alpha": 0.95,
+        })
+
+    sem_norm = dados[dados["TEM_NORM"] == 0]
+    com_norm = dados[dados["TEM_NORM"] == 1]
+    ax.scatter(
+        sem_norm[coluna_x],
+        sem_norm[coluna_y],
+        s=78,
+        facecolor=WHITE,
+        edgecolor="#404040",
+        linewidth=1.4,
+        label="Sem NORM",
+        zorder=5,
+    )
+    ax.scatter(
+        com_norm[coluna_x],
+        com_norm[coluna_y],
+        s=95,
+        facecolor="#D62728",
+        edgecolor=WHITE,
+        linewidth=1.0,
+        label="Com NORM",
+        zorder=6,
+    )
+
+    for _, linha in dados.iterrows():
+        ax.annotate(
+            linha["LOCAL DA GERAÇÃO"],
+            (linha[coluna_x], linha[coluna_y]),
+            xytext=(4, 4),
+            textcoords="offset points",
+            fontsize=7,
+            color="#4D4D4D",
+            zorder=7,
+        )
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Salinidade (mg/L)")
+    ax.set_ylabel(rotulo_y)
+    ax.set_title(
+        "Salinidade × " + rotulo_y.split(" (")[0]
+        + " — probabilidade estimada de NORM"
+        + complemento_titulo,
+        fontweight="bold",
+        color=NAVY,
+        loc="left",
+    )
+    ax.grid(which="both", linestyle=":", alpha=0.18)
+    ax.legend(loc="lower left", frameon=True)
+
+    barra = fig.colorbar(superficie, ax=ax, pad=0.03)
+    barra.set_label("Probabilidade estimada de NORM")
+    barra.ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
+
+    fig.tight_layout()
+    if salvar_em:
+        fig.savefig(salvar_em, dpi=300, bbox_inches="tight", facecolor=WHITE)
     if exibir:
         plt.show()
     else:
@@ -2077,5 +2379,419 @@ def grafico_bsw_plataforma(
     logger.info(
         "Gráfico de BSW finalizado"
     )
+
+    return fig
+
+import logging
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+
+from scipy.interpolate import griddata
+from sklearn.preprocessing import StandardScaler
+
+
+logger = logging.getLogger(__name__)
+
+
+def grafico_quimica_superficie_3d(
+    df_analise: pd.DataFrame,
+    salvar_em: str | None = None,
+    exibir: bool = True,
+):
+    """
+    Gera superfície 3D interpolada das variáveis químicas padronizadas.
+
+    Eixos:
+        X = Salinidade
+        Y = Relação Bário/Estrôncio
+        Z = BSW
+
+    A superfície representa uma interpolação dos valores observados.
+    Os pontos reais das plataformas são adicionados sobre a superfície.
+
+    Parameters
+    ----------
+    df_analise : pd.DataFrame
+        DataFrame de análise.
+
+    salvar_em : str | None, padrão=None
+        Caminho para salvar o gráfico em HTML.
+
+    exibir : bool, padrão=True
+        Se True, exibe o gráfico.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Figura Plotly criada.
+    """
+
+    # ======================================================
+    # VARIÁVEIS
+    # ======================================================
+
+    variaveis = [
+        "MEDIANA_SALINIDADE_PLAT",
+        "RELACAO_BARIO_ESTRONCIO",
+        "MEDIA_BSW_PLAT",
+    ]
+
+    dados = (
+        df_analise[
+            [
+                "LOCAL DA GERAÇÃO",
+                "TEM_NORM",
+                "PROB_NORM",
+                "MASSA_CLASSIFICADA_KG",
+                "TIPO_MASSA",
+                *variaveis,
+            ]
+        ]
+        .replace(
+            [np.inf, -np.inf],
+            np.nan,
+        )
+        .dropna()
+        .copy()
+    )
+
+    dados["NORM"] = (
+        dados["TEM_NORM"]
+        .astype(int)
+        .map(
+            {
+                1: "Com NORM",
+                0: "Sem NORM",
+            }
+        )
+    )
+
+    dados["MASSA_CLASSIFICADA_KG"] = dados["MASSA_CLASSIFICADA_KG"].clip(lower=0)
+    dados["MASSA_CLASSIFICADA_T"] = dados["MASSA_CLASSIFICADA_KG"] / 1000
+    log_massa = np.log1p(dados["MASSA_CLASSIFICADA_KG"])
+    dados["TAMANHO_MARCADOR"] = (
+        6 + 22 * log_massa / max(log_massa.max(), 1)
+    )
+
+    # ======================================================
+    # PADRONIZAÇÃO
+    # ======================================================
+
+    scaler = StandardScaler()
+
+    colunas_z = [
+        "SALINIDADE_Z",
+        "RELACAO_BA_SR_Z",
+        "BSW_Z",
+    ]
+
+    dados[colunas_z] = scaler.fit_transform(
+        dados[variaveis]
+    )
+
+    # ======================================================
+    # DADOS PARA SUPERFÍCIE
+    # ======================================================
+
+    x = dados["SALINIDADE_Z"].to_numpy()
+    y = dados["RELACAO_BA_SR_Z"].to_numpy()
+    z = dados["BSW_Z"].to_numpy()
+
+    # Grade regular para interpolação
+    grid_x = np.linspace(
+        x.min(),
+        x.max(),
+        80,
+    )
+
+    grid_y = np.linspace(
+        y.min(),
+        y.max(),
+        80,
+    )
+
+    X, Y = np.meshgrid(
+        grid_x,
+        grid_y,
+    )
+
+    # ======================================================
+    # INTERPOLAÇÃO
+    # ======================================================
+
+    Z = griddata(
+        points=(x, y),
+        values=z,
+        xi=(X, Y),
+        method="linear",
+    )
+
+
+
+    # ======================================================
+    # GRÁFICO
+    # ======================================================
+
+    fig = go.Figure()
+
+    # ------------------------------------------------------
+    # SUPERFÍCIE
+    # ------------------------------------------------------
+
+    fig.add_trace(
+        go.Surface(
+            x=X,
+            y=Y,
+            z=Z,
+
+            colorscale="Viridis",
+
+            opacity=0.75,
+            showscale=False,
+
+            colorbar=dict(
+                title=dict(
+                    text="BSW (z-score)",
+                    side="top",
+                ),
+                x=1.08,
+                y=0.42,
+                len=0.65,
+                thickness=20,
+            ),
+
+            hovertemplate=(
+                "Salinidade: %{x:.2f}<br>"
+                "Relação Ba/Sr: %{y:.2f}<br>"
+                "BSW estimado: %{z:.2f}"
+                "<extra></extra>"
+            ),
+
+            name="Superfície química",
+        )
+    )
+
+    # ======================================================
+    # PONTOS REAIS — SEM NORM
+    # ======================================================
+
+    sem_norm = dados[
+        dados["TEM_NORM"] == 0
+    ]
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=sem_norm["SALINIDADE_Z"],
+            y=sem_norm["RELACAO_BA_SR_Z"],
+            z=sem_norm["BSW_Z"],
+
+            mode="markers",
+
+            marker=dict(
+                size=sem_norm["TAMANHO_MARCADOR"],
+                color=sem_norm["PROB_NORM"],
+                colorscale="RdYlBu_r",
+                cmin=0,
+                cmax=1,
+                showscale=True,
+                colorbar=dict(
+                    title=dict(
+                        text="Probabilidade de NORM",
+                        side="right",
+                    ),
+                    tickformat=".0%",
+                    x=1.08,
+                    y=0.38,
+                    len=0.55,
+                    thickness=20,
+                ),
+                symbol="circle",
+                line=dict(
+                    color="white",
+                    width=1,
+                ),
+            ),
+
+            text=sem_norm["LOCAL DA GERAÇÃO"],
+
+            customdata=np.column_stack(
+                (
+                    sem_norm[
+                        "MEDIANA_SALINIDADE_PLAT"
+                    ],
+                    sem_norm[
+                        "RELACAO_BARIO_ESTRONCIO"
+                    ],
+                    sem_norm[
+                        "MEDIA_BSW_PLAT"
+                    ],
+                    sem_norm["MASSA_CLASSIFICADA_T"],
+                    sem_norm["PROB_NORM"],
+                )
+            ),
+
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                "Sem NORM<br><br>"
+                "Salinidade: %{customdata[0]:.2f}<br>"
+                "Relação Ba/Sr: %{customdata[1]:.4f}<br>"
+                "BSW: %{customdata[2]:.2f}%<br>"
+                "Borra oleosa: %{customdata[3]:,.2f} t<br>"
+                "Probabilidade de NORM: %{customdata[4]:.1%}"
+                "<extra></extra>"
+            ),
+
+            name="Sem NORM",
+        )
+    )
+
+    # ======================================================
+    # PONTOS REAIS — COM NORM
+    # ======================================================
+
+    com_norm = dados[
+        dados["TEM_NORM"] == 1
+    ]
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=com_norm["SALINIDADE_Z"],
+            y=com_norm["RELACAO_BA_SR_Z"],
+            z=com_norm["BSW_Z"],
+
+            mode="markers",
+
+            marker=dict(
+                size=com_norm["TAMANHO_MARCADOR"],
+                color=com_norm["PROB_NORM"],
+                colorscale="RdYlBu_r",
+                cmin=0,
+                cmax=1,
+                showscale=False,
+                symbol="diamond",
+                line=dict(
+                    color="white",
+                    width=1,
+                ),
+            ),
+
+            text=com_norm["LOCAL DA GERAÇÃO"],
+
+            customdata=np.column_stack(
+                (
+                    com_norm[
+                        "MEDIANA_SALINIDADE_PLAT"
+                    ],
+                    com_norm[
+                        "RELACAO_BARIO_ESTRONCIO"
+                    ],
+                    com_norm[
+                        "MEDIA_BSW_PLAT"
+                    ],
+                    com_norm["MASSA_CLASSIFICADA_T"],
+                    com_norm["PROB_NORM"],
+                )
+            ),
+
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                "Com NORM<br><br>"
+                "Salinidade: %{customdata[0]:.2f}<br>"
+                "Relação Ba/Sr: %{customdata[1]:.4f}<br>"
+                "BSW: %{customdata[2]:.2f}%<br>"
+                "Borra com NORM: %{customdata[3]:,.2f} t<br>"
+                "Probabilidade de NORM: %{customdata[4]:.1%}"
+                "<extra></extra>"
+            ),
+
+            name="Com NORM",
+        )
+    )
+
+    # ======================================================
+    # LAYOUT
+    # ======================================================
+    fig.update_layout(
+
+        title=(
+            "Superfície química — "
+            "Salinidade × Relação Ba/Sr × BSW"
+        ),
+
+        width=1100,
+        height=800,
+
+        scene=dict(
+
+            xaxis_title="Salinidade padronizada (z-score)",
+
+            yaxis_title="Relação Ba/Sr padronizada (z-score)",
+
+            zaxis_title="BSW padronizado (z-score)",
+
+            aspectmode="cube",
+
+            camera=dict(
+                eye=dict(
+                    x=1.6,
+                    y=1.6,
+                    z=1.2,
+                )
+            ),
+        ),
+
+        # ==========================================
+        # LEGENDA NORM
+        # ==========================================
+
+        legend=dict(
+            title=dict(
+                text="Classificação"
+            ),
+
+            x=1.02,
+            y=1.0,
+
+            xanchor="left",
+            yanchor="top",
+
+            bgcolor="rgba(255,255,255,0.8)",
+
+            bordercolor="lightgray",
+            borderwidth=1,
+        ),
+
+        # Mais espaço do lado direito
+        margin=dict(
+            l=20,
+            r=240,
+            b=20,
+            t=70,
+        ),
+    )
+
+    # ======================================================
+    # SALVAR
+    # ======================================================
+
+    if salvar_em is not None:
+
+        fig.write_html(
+            str(salvar_em)
+        )
+
+        logger.info(
+            "Superfície química 3D salva em %s",
+            salvar_em,
+        )
+
+    # ======================================================
+    # EXIBIR
+    # ======================================================
+
+    if exibir:
+        fig.show()
 
     return fig

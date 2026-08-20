@@ -1,27 +1,9 @@
-import sys
-import os
 import logging
 import pandas as pd
 import numpy as np
-import geopandas as gpd
-from shapely import wkt
-import matplotlib.pyplot as plt
-from unidecode import unidecode
-import logging
 
 logger =  logging.getLogger()
 
-
-def media_ponderada(x, valor, peso):
-    dados = x[[valor, peso]].dropna()
-
-    if dados.empty or dados[peso].sum() == 0:
-        return np.nan
-
-    return np.average(
-        dados[valor],
-        weights=dados[peso]
-    )
 
 def agrupar_residuos_plataforma(
     
@@ -62,6 +44,23 @@ def criar_flags_residuos_plataforma(
         "Criando flags de resíduos por plataforma"
     )
 
+    df = df.copy()
+    tipo_residuo = df["TIPO DE RESÍDUO"].astype("string")
+    massa = pd.to_numeric(
+        df["MASSA DO VOLUME (kg)"], errors="coerce"
+    ).fillna(0)
+
+    eh_norm = tipo_residuo.str.contains(
+        "BORRA OLEOSA COM NORM", case=False, na=False
+    )
+    eh_oleosa = (
+        tipo_residuo.str.contains("BORRA OLEOSA", case=False, na=False)
+        & ~tipo_residuo.str.contains("NORM", case=False, na=False)
+    )
+
+    df["MASSA_NORM_KG"] = massa.where(eh_norm, 0)
+    df["MASSA_OLEOSA_KG"] = massa.where(eh_oleosa, 0)
+
     plataformas = (
         df
         .groupby("LOCAL DA GERAÇÃO")
@@ -93,7 +92,9 @@ def criar_flags_residuos_plataforma(
             MASSA_TOTAL=(
                 "MASSA DO VOLUME (kg)",
                 "sum"
-            )
+            ),
+            MASSA_NORM_KG=("MASSA_NORM_KG", "sum"),
+            MASSA_OLEOSA_KG=("MASSA_OLEOSA_KG", "sum"),
         )
         .reset_index()
 
@@ -111,6 +112,17 @@ def criar_flags_residuos_plataforma(
         plataformas["TEM_NORM"] == 1,
         "TEM_OLEOSA"
     ] = 0
+
+    plataformas["MASSA_CLASSIFICADA_KG"] = np.where(
+        plataformas["TEM_NORM"] == 1,
+        plataformas["MASSA_NORM_KG"],
+        plataformas["MASSA_OLEOSA_KG"],
+    )
+    plataformas["TIPO_MASSA"] = np.where(
+        plataformas["TEM_NORM"] == 1,
+        "Borra oleosa com NORM",
+        "Borra oleosa sem NORM",
+    )
 
     logger.info(
         "Flags criadas | %d plataformas | %d com NORM",
@@ -351,62 +363,58 @@ def agregar_mensal_plataforma(df_agua_periodo):
     Agrega os dados no nivel PLATAFORMA + Mes.
     """
 
-    mensal_plataforma = (
-        df_agua_periodo
-        .groupby(
-            ['LOCAL DA GERAÇÃO', 'Mes'],
-            group_keys=False
-        )
-        .apply(
-            lambda g: pd.Series({
-
-                'AGUA_PLAT':
-                    g['QW_mensal_m3'].sum(),
-
-                'OLEO_PLAT':
-                    g['QO_mensal_m3'].sum(),
-
-                'BARIO_PLAT':
-                    media_ponderada(
-                        g,
-                        'BARIO',
-                        'QW_mensal_m3'
-                    ),
-
-                'ESTRONCIO_PLAT':
-                    media_ponderada(
-                        g,
-                        'ESTRONCIO',
-                        'QW_mensal_m3'
-                    ),
-
-                'SALINIDADE_PLAT':
-                    media_ponderada(
-                        g,
-                        'SALINIDADE',
-                        'QW_mensal_m3'
-                    ),
-
-                'SULFATO_PLAT':
-                    media_ponderada(
-                        g,
-                        'SULFATO',
-                        'QW_mensal_m3'
-                    )
-            })
-        )
-        .reset_index()
+    # O pre-processamento FENIX ja entrega exatamente uma linha
+    # por plataforma e mes, com a quimica ponderada por poco.
+    # Impede que uma duplicidade volte a somar volumes ou escolha
+    # arbitrariamente uma concentracao com o agregador "first".
+    chaves = ["LOCAL DA GERAÇÃO", "Mes"]
+    duplicados = df_agua_periodo.duplicated(
+        subset=chaves,
+        keep=False,
     )
 
-    mensal_plataforma['BSW_PLAT'] = (
+    if duplicados.any():
+        exemplos = (
+            df_agua_periodo
+            .loc[duplicados, chaves]
+            .drop_duplicates()
+            .head()
+            .to_dict("records")
+        )
+        raise ValueError(
+            "O FENIX deveria possuir uma linha por plataforma "
+            f"e mes. Duplicidades encontradas: {exemplos}"
+        )
+
+    mensal_plataforma = (
+    df_agua_periodo
+    .groupby(
+        ['LOCAL DA GERAÇÃO', 'Mes'],
+        as_index=False
+    )
+    .agg(
+        AGUA_PLAT=('QW_mensal_m3', 'sum'),
+        OLEO_PLAT=('QO_mensal_m3', 'sum'),
+        BARIO_PLAT=('BARIO', 'first'),
+        ESTRONCIO_PLAT=('ESTRONCIO', 'first'),
+        SALINIDADE_PLAT=('SALINIDADE', 'first')
+    )
+)
+
+    volume_total = (
         mensal_plataforma['AGUA_PLAT']
-        /
+        + mensal_plataforma['OLEO_PLAT']
+    )
+
+    mensal_plataforma['BSW_PLAT'] = np.where(
+        volume_total > 0,
         (
             mensal_plataforma['AGUA_PLAT']
-            +
-            mensal_plataforma['OLEO_PLAT']
-        )
-    ) * 100
+            / volume_total
+        ) * 100,
+        np.nan,
+    )
+
 
     return mensal_plataforma
 
@@ -494,6 +502,7 @@ def gerar_estatisticas_plataforma(mensal_plataforma):
                 'std'
             ),
 
+
             # SALINIDADE
             MEDIANA_SALINIDADE_PLAT=(
                 'SALINIDADE_PLAT',
@@ -510,21 +519,6 @@ def gerar_estatisticas_plataforma(mensal_plataforma):
                 'std'
             ),
 
-            # SULFATO
-            MEDIANA_SULFATO_PLAT=(
-                'SULFATO_PLAT',
-                'median'
-            ),
-
-            MEDIA_SULFATO_PLAT=(
-                'SULFATO_PLAT',
-                'mean'
-            ),
-
-            STD_SULFATO_PLAT=(
-                'SULFATO_PLAT',
-                'std'
-            )
         )
         .reset_index()
     )
@@ -558,6 +552,28 @@ def gerar_df_analise(
         )
         .copy()
     )
+
+    estroncio = pd.to_numeric(
+        df_analise["MEDIANA_ESTRONCIO_PLAT"],
+        errors="coerce",
+    )
+    bario = pd.to_numeric(
+        df_analise["MEDIANA_BARIO_PLAT"],
+        errors="coerce",
+    )
+
+    # Razão adimensional Ba/Sr. Valores com denominador não positivo
+    # permanecem ausentes para evitar divisões inválidas.
+    df_analise["RELACAO_BARIO_ESTRONCIO"] = np.where(
+        estroncio > 0,
+        bario / estroncio,
+        np.nan,
+    )
+    df_analise["RELACAO_BARIO_ESTRONCIO"] = (
+        df_analise["RELACAO_BARIO_ESTRONCIO"]
+        .replace([np.inf, -np.inf], np.nan)
+    )
+
 
     return df_analise
 
@@ -619,4 +635,3 @@ def processar_df_analise(
     )
 
     return df_analise
-
