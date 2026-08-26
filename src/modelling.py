@@ -33,7 +33,6 @@ VARIAVEIS_MODELO = [
     "MEDIANA_SALINIDADE_PLAT",
     "MEDIANA_BARIO_PLAT",
     "MEDIANA_ESTRONCIO_PLAT",
-    "RELACAO_BARIO_ESTRONCIO",
 ]
 
 def preparar_dados_modelo(
@@ -77,7 +76,6 @@ def preparar_dados_modelo(
             "MEDIANA_SALINIDADE_PLAT": "SALINIDADE",
             "MEDIANA_BARIO_PLAT": "BARIO",
             "MEDIANA_ESTRONCIO_PLAT": "ESTRONCIO",
-            "RELACAO_BARIO_ESTRONCIO": "RELACAO_BA_SR",
         }
     )
 
@@ -85,7 +83,6 @@ def preparar_dados_modelo(
         "SALINIDADE",
         "BARIO",
         "ESTRONCIO",
-        "RELACAO_BA_SR",
     ]
 
     # Conversão numérica
@@ -117,7 +114,6 @@ def preparar_dados_modelo(
         (dados["SALINIDADE"] > 0)
         & (dados["BARIO"] > 0)
         & (dados["ESTRONCIO"] > 0)
-        & (dados["RELACAO_BA_SR"] > 0)
     ].copy()
 
     dados[COLUNA_ALVO] = (
@@ -445,10 +441,6 @@ def comparar_modelos(
             "SALINIDADE",
             "BARIO",
             "ESTRONCIO",
-        ],
-        "Salinidade + Relação Ba/Sr": [
-            "SALINIDADE",
-            "RELACAO_BA_SR",
         ],
     }
 

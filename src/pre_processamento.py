@@ -445,7 +445,9 @@ def extrair_parametro_fenix(col: str) -> str:
     return ALIAS_QUIMICAS.get(bruto, bruto)
 
 def carregar_dados_fenix(
-    pasta: Path = PASTA_RAW
+    pasta: Path = PASTA_RAW,
+    salvar_todas_colunas: bool = True,
+    salvar_colunas_determinadas: bool = True
 ) -> pd.DataFrame:
 
     logger.info(
@@ -511,19 +513,6 @@ def carregar_dados_fenix(
             columns=renomear
         )
 
-        colunas_alvo = (
-            list(COLUNAS_FIXAS.values())
-            + COLUNAS_QUIMICAS
-        )
-
-        colunas_presentes = [
-            col
-            for col in colunas_alvo
-            if col in df.columns
-        ]
-
-        df = df[colunas_presentes].copy()
-
         df["_arquivo"] = arquivo
 
         dfs.append(df)
@@ -533,12 +522,38 @@ def carregar_dados_fenix(
         ignore_index=True
     )
 
+    if salvar_todas_colunas:
+        salvar_csv(
+            df_total,
+            "fenix_compilado_todas_colunas.csv"
+        )
+
+    colunas_alvo = (
+        list(COLUNAS_FIXAS.values())
+        + COLUNAS_QUIMICAS
+        + ["_arquivo"]
+    )
+
+    colunas_presentes = [
+        col
+        for col in colunas_alvo
+        if col in df_total.columns
+    ]
+
+    df_total = df_total[colunas_presentes].copy()
+
     logger.info(
         "Carregamento FENIX finalizado | %d arquivos | %d linhas x %d colunas",
         len(dfs),
         df_total.shape[0],
         df_total.shape[1]
     )
+
+    if salvar_colunas_determinadas:
+        salvar_csv(
+            df_total,
+            "fenix_compilado.csv"
+        )
 
     return df_total
 

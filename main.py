@@ -14,6 +14,7 @@ from src.pre_processamento import (
 
 
 from src.processing import (
+    adicionar_classificacao_norm_mensal,
     processar_df_analise,
 )
 
@@ -26,6 +27,7 @@ from src.modelling import (
 
 from src.graficos import (
     grafico_bsw_plataforma,
+    grafico_razao_ba_sr_plataforma,
     grafico_quimica_superficie_3d,
     grafico_scatter_matrix,
     grafico_quimica_3d,
@@ -145,6 +147,15 @@ def main() -> None:
         salvar_csv(
             scr_sigre,
             "base_integrada_residuos.csv",
+        )
+
+        df_fenix = adicionar_classificacao_norm_mensal(
+            df_fenix=df_fenix,
+            scr_sigre=scr_sigre,
+        )
+        salvar_csv(
+            df_fenix,
+            "fenix_processado.csv",
         )
 
 
@@ -292,6 +303,16 @@ def main() -> None:
             salvar_em=(
                 PASTA_GRAFICOS
                 / "01_bsw_plataforma.png"
+            ),
+            exibir=False,
+        )
+
+        grafico_razao_ba_sr_plataforma(
+            df_analise=df_analise,
+            modo=MODO_ANALISE,
+            salvar_em=(
+                PASTA_GRAFICOS
+                / "02_razao_ba_sr_plataforma.png"
             ),
             exibir=False,
         )

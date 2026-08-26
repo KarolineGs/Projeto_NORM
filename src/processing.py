@@ -131,6 +131,102 @@ def criar_flags_residuos_plataforma(
     )
 
     return plataformas
+
+
+def adicionar_classificacao_norm_mensal(
+    df_fenix: pd.DataFrame,
+    scr_sigre: pd.DataFrame,
+) -> pd.DataFrame:
+    """Adiciona ao FENIX a classificacao de NORM por plataforma e mes.
+
+    A classificacao considera somente registros de borra oleosa. Um mes
+    recebe 1 quando existe ao menos um registro de borra oleosa com NORM e
+    0 nos demais casos, inclusive quando nao existe registro de NORM no
+    SCR/SIGRE para a plataforma naquele mes.
+    """
+
+    chaves = ["LOCAL DA GERAÇÃO", "Mes"]
+    coluna_tipo = "TIPO DE RESÍDUO"
+
+    colunas_fenix_ausentes = [
+        coluna for coluna in chaves if coluna not in df_fenix.columns
+    ]
+    colunas_residuos_ausentes = [
+        coluna
+        for coluna in [*chaves, coluna_tipo]
+        if coluna not in scr_sigre.columns
+    ]
+
+    if colunas_fenix_ausentes:
+        raise KeyError(
+            "Colunas ausentes no FENIX: "
+            f"{colunas_fenix_ausentes}"
+        )
+    if colunas_residuos_ausentes:
+        raise KeyError(
+            "Colunas ausentes no SCR/SIGRE: "
+            f"{colunas_residuos_ausentes}"
+        )
+
+    fenix = df_fenix.copy()
+    residuos = scr_sigre.copy()
+
+    # Normaliza as datas para o primeiro dia do mes antes do cruzamento.
+    fenix["Mes"] = (
+        pd.to_datetime(fenix["Mes"], errors="coerce")
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+    residuos["Mes"] = (
+        pd.to_datetime(residuos["Mes"], errors="coerce")
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+
+    tipo_residuo = residuos[coluna_tipo].astype("string")
+    eh_borra_oleosa = tipo_residuo.str.contains(
+        "BORRA OLEOSA", case=False, na=False
+    )
+    eh_norm = tipo_residuo.str.contains(
+        "BORRA OLEOSA COM NORM", case=False, na=False
+    )
+
+    residuos_classificaveis = residuos.loc[
+        eh_borra_oleosa & residuos["Mes"].notna(),
+        chaves,
+    ].copy()
+    residuos_classificaveis["TEM_NORM_MES"] = (
+        eh_norm.loc[residuos_classificaveis.index].astype(int)
+    )
+
+    classificacao_mensal = (
+        residuos_classificaveis
+        .groupby(chaves, as_index=False, dropna=False)
+        .agg(TEM_NORM_MES=("TEM_NORM_MES", "max"))
+    )
+
+    resultado = fenix.merge(
+        classificacao_mensal,
+        on=chaves,
+        how="left",
+        validate="many_to_one",
+    )
+    resultado["TEM_NORM_MES"] = (
+        resultado["TEM_NORM_MES"]
+        .fillna(0)
+        .astype(int)
+    )
+
+    logger.info(
+        "Classificacao mensal adicionada ao FENIX | "
+        "%d com NORM | %d sem NORM",
+        int((resultado["TEM_NORM_MES"] == 1).sum()),
+        int((resultado["TEM_NORM_MES"] == 0).sum()),
+    )
+
+    return resultado
+
+
 def filtrar_periodo_sigre(
     scr_sigre: pd.DataFrame,
     df_fenix: pd.DataFrame,

@@ -2382,6 +2382,94 @@ def grafico_bsw_plataforma(
 
     return fig
 
+
+def grafico_razao_ba_sr_plataforma(
+    df_analise: pd.DataFrame,
+    salvar_em: str | None = None,
+    exibir: bool = True,
+    modo: str = "janela",
+):
+    """Gera gráfico da razão adimensional Ba/Sr por plataforma."""
+
+    if modo not in {"data", "janela"}:
+        raise ValueError("modo deve ser 'data' ou 'janela'")
+
+    coluna = "RELACAO_BARIO_ESTRONCIO"
+    colunas_obrigatorias = {
+        "LOCAL DA GERAÇÃO", "TEM_NORM", "TEM_OLEOSA", coluna
+    }
+    ausentes = colunas_obrigatorias.difference(df_analise.columns)
+    if ausentes:
+        raise KeyError(f"Colunas ausentes para o gráfico Ba/Sr: {sorted(ausentes)}")
+
+    dados = df_analise.copy()
+    dados[coluna] = pd.to_numeric(dados[coluna], errors="coerce")
+    dados[coluna] = dados[coluna].replace([np.inf, -np.inf], np.nan)
+
+    df_norm = dados.loc[dados["TEM_NORM"].eq(1)].copy()
+    df_oleosa = dados.loc[
+        dados["TEM_OLEOSA"].eq(1) & dados["TEM_NORM"].eq(0)
+    ].copy()
+    df_plat = pd.concat(
+        [df_norm.assign(GRUPO="NORM"), df_oleosa.assign(GRUPO="OLEOSA")],
+        ignore_index=True,
+    ).dropna(subset=[coluna])
+    df_plat = df_plat.sort_values(coluna).reset_index(drop=True)
+
+    # Mantém o mesmo critério visual do gráfico de BSW: menor valor
+    # observado entre as plataformas classificadas como NORM.
+    referencia = df_norm[coluna].dropna().min()
+    periodo = (
+        "primeiro registro do resíduo"
+        if modo == "data"
+        else "período de ocorrência do resíduo"
+    )
+
+    fig, ax = plt.subplots(figsize=(28, 8))
+    cores = {"NORM": "crimson", "OLEOSA": "forestgreen"}
+    ax.bar(
+        df_plat["LOCAL DA GERAÇÃO"],
+        df_plat[coluna],
+        color=df_plat["GRUPO"].map(cores),
+        edgecolor="white",
+        linewidth=0.7,
+    )
+    if pd.notna(referencia):
+        ax.axhline(referencia, color="black", linestyle="--", linewidth=2)
+
+    ax.set_ylabel("Razão Ba/Sr (adimensional)", fontsize=12)
+    ax.set_title(
+        f"Razão Ba/Sr por plataforma — {periodo}",
+        fontsize=16,
+        fontweight="bold",
+    )
+    ax.grid(axis="y", linestyle=":", alpha=0.4)
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    ax.margins(x=0)
+
+    handles = [
+        Patch(color="crimson", label="NORM"),
+        Patch(color="forestgreen", label="Oleosa"),
+    ]
+    if pd.notna(referencia):
+        handles.append(plt.Line2D(
+            [0], [0], color="black", linestyle="--", linewidth=2,
+            label=f"Referência ({referencia:.3f})",
+        ))
+    ax.legend(handles=handles, fontsize=10, loc="upper left")
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", fontsize=11)
+    plt.subplots_adjust(bottom=0.20, left=0.06, right=0.94, top=0.90)
+
+    if salvar_em is not None:
+        fig.savefig(salvar_em, dpi=300, bbox_inches="tight")
+    if exibir:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    logger.info("Gráfico da razão Ba/Sr finalizado")
+    return fig
+
 import logging
 
 import numpy as np
